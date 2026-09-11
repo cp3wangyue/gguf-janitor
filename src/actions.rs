@@ -460,3 +460,154 @@ mod tests {
     #[allow(dead_code)]
     fn _uses() -> HashMap<String, String> { HashMap::new() }
 }
+
+/// Undo a previous archive move: read the JSONL manifest(s) in `archive_dir`
+/// and move entries back to their original paths when safe (destination
+/// missing again, source present, hash verified). Returns per-entry results.
+pub fn undo_archive(archive_dir: &Path, dry_run: bool) -> Result<ActionResult, ActionError> {
+    use serde::Deserialize;
+    let mut res = ActionResult { dry_run, ..Default::default() };
+    let manifest = archive_dir.join("gguf-janitor-archive.jsonl");
+    let txt = std::fs::read_to_string(&manifest)
+        .map_err(|e| ActionError::Io { path: manifest.display().to_string(), source: e })?;
+    #[derive(Deserialize)]
+    struct ManifestLine {
+        entries: Vec<ArchiveEntry>,
+    }
+    for line in txt.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(ml) = serde_json::from_str::<ManifestLine>(line) else {
+            res.performed.push(ActionItem {
+                path: line.chars().take(60).collect(),
+                ok: false,
+                detail: "unparseable manifest line (skipped)".into(),
+            });
+            continue;
+        };
+        for e in &ml.entries {
+            let to = Path::new(&e.to);
+            let from = Path::new(&e.from);
+            if from.exists() {
+                res.performed.push(ActionItem {
+                    path: e.from.clone(),
+                    ok: true,
+                    detail: "original path already occupied (nothing to undo)".into(),
+                });
+                continue;
+            }
+            if !to.exists() {
+                res.performed.push(ActionItem {
+                    path: e.from.clone(),
+                    ok: false,
+                    detail: format!("archived copy missing: {}", e.to),
+                });
+                continue;
+            }
+            if dry_run {
+                res.performed.push(ActionItem {
+                    path: e.from.clone(),
+                    ok: true,
+                    detail: format!("would move back from {}", e.to),
+                });
+                continue;
+            }
+            // Verify the archived copy before moving it back.
+            match hash_file(to) {
+                Ok(h) if h == e.xxh3 => {}
+                Ok(_) => {
+                    res.performed.push(ActionItem {
+                        path: e.from.clone(),
+                        ok: false,
+                        detail: "hash mismatch on archived copy (skipped)".into(),
+                    });
+                    continue;
+                }
+                Err(err) => {
+                    res.performed.push(ActionItem { path: e.from.clone(), ok: false, detail: format!("unreadable archived copy: {err}") });
+                    continue;
+                }
+            }
+            if let Some(parent) = from.parent() {
+                if let Err(err) = std::fs::create_dir_all(parent) {
+                    res.performed.push(ActionItem { path: e.from.clone(), ok: false, detail: format!("cannot recreate directory: {err}") });
+                    continue;
+                }
+            }
+            match std::fs::rename(to, from) {
+                Ok(()) => res.performed.push(ActionItem {
+                    path: e.from.clone(),
+                    ok: true,
+                    detail: "restored from archive".into(),
+                }),
+                Err(_) => {
+                    // cross-volume: verified copy back
+                    match copy_verified(to, from, e.xxh3) {
+                        Ok(()) => {
+                            let _ = std::fs::remove_file(to);
+                            res.performed.push(ActionItem { path: e.from.clone(), ok: true, detail: "restored from archive (copy across volumes)".into() });
+                        }
+                        Err(err) => res.performed.push(ActionItem { path: e.from.clone(), ok: false, detail: format!("{err}") }),
+                    }
+                }
+            }
+        }
+    }
+    Ok(res)
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("gj-undo-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn undo_restores_archived_file() {
+        let d = tmpdir("roundtrip");
+        let src_dir = d.join("src");
+        let dst = d.join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        let a = src_dir.join("m.bin");
+        let data: Vec<u8> = (0..5000u32).map(|i| i as u8).collect();
+        fs::write(&a, &data).unwrap();
+        let r = archive(&[a.display().to_string()], &dst, false).unwrap();
+        assert!(r.performed[0].ok);
+        assert!(!a.exists());
+
+        // dry run first
+        let u = undo_archive(&dst, true).unwrap();
+        assert!(u.performed[0].ok);
+        assert!(!a.exists(), "dry run must not move");
+
+        // real undo
+        let u = undo_archive(&dst, false).unwrap();
+        assert!(u.performed.iter().all(|i| i.ok), "{:?}", u.performed);
+        assert_eq!(fs::read(&a).unwrap(), data, "file restored with identical bytes");
+        assert!(!dst.join("m.bin").exists(), "archived copy moved back");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn undo_skips_occupied_originals() {
+        let d = tmpdir("occupied");
+        let src_dir = d.join("src");
+        let dst = d.join("dest");
+        fs::create_dir_all(&src_dir).unwrap();
+        let a = src_dir.join("m.bin");
+        fs::write(&a, b"current").unwrap();
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("gguf-janitor-archive.jsonl"), serde_json::json!({
+            "created_unix": 0, "destination": dst.display().to_string(),
+            "entries": [{"from": a.display().to_string(), "to": dst.join("m.bin").display().to_string(), "size": 7, "xxh3": 1}]
+        }).to_string()).unwrap();
+        let u = undo_archive(&dst, false).unwrap();
+        assert!(u.performed[0].ok);
+        assert_eq!(fs::read(&a).unwrap(), b"current", "occupied original untouched");
+        let _ = fs::remove_dir_all(&d);
+    }
+}

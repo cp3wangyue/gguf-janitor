@@ -101,6 +101,13 @@ enum Command {
         #[arg(long, default_value_t = 8192)]
         context: u64,
     },
+    /// Move archived files back to their original locations.
+    Undo {
+        /// Folder containing gguf-janitor-archive.jsonl (the --dest used earlier).
+        archive_folder: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Activate a license key.
     Activate { key: String },
 }
@@ -345,6 +352,15 @@ fn main() -> Result<()> {
                     v.note
                 );
             }
+        }
+        Command::Undo { archive_folder, dry_run } => {
+            let r = actions::undo_archive(&archive_folder, dry_run)?;
+            for item in &r.performed {
+                println!("  [{}] {} — {}", if item.ok { "OK" } else { "SKIP" }, item.path, item.detail);
+            }
+            let n = r.performed.iter().filter(|i| i.ok).count();
+            println!("
+{} entrie(s) processed{}", n, if dry_run { " (dry run)" } else { "" });
         }
         Command::Activate { key } => match license::activate(&key) {
             Ok(LicenseState::Pro) => println!("License activated. Thank you for supporting GGUF Janitor!"),

@@ -1,6 +1,6 @@
 [package]
 name = "gguf_janitor"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Find and safely reclaim disk space wasted by duplicate local LLM model files (GGUF) across Ollama, LM Studio, llama.cpp and HuggingFace caches."
 license = "MIT"

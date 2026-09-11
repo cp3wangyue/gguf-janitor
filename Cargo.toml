@@ -1,0 +1,39 @@
+[package]
+name = "gguf_janitor"
+version = "0.1.0"
+edition = "2021"
+description = "Find and safely reclaim disk space wasted by duplicate local LLM model files (GGUF) across Ollama, LM Studio, llama.cpp and HuggingFace caches."
+license = "MIT"
+
+[lib]
+name = "gguf_janitor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gguf-janitor"
+path = "src/main.rs"
+
+# Key generator kept OUT of the shipped release zip.
+[[bin]]
+name = "gj-keygen"
+path = "src/bin/keygen.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+trash = "5"
+anyhow = "1"
+thiserror = "2"
+sysinfo = "0.33"
+sha2 = "0.10"
+hmac = "0.12"
+rfd = "0.15"
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts", "persistence"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

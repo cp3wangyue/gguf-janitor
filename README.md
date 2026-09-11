@@ -13,6 +13,8 @@ RAM / VRAM.
 > a private model store. One 8 GB model × 3 tools = **24 GB gone**. GGUF
 > Janitor fixes that — without breaking any of them.
 
+![GGUF Janitor duplicates view](docs/screenshot-duplicates.png)
+
 ## Why it's safe
 
 Reclaiming space from files that other programs manage is risky, so GGUF

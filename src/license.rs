@@ -1,20 +1,33 @@
 //! Offline license handling.
 //!
 //! Free tier: unlimited scanning/reporting; dedupe & archive actions limited
-//! to files <= 1 GiB each. A license key unlocks unlimited actions.
+//! to files <= 1 GiB each. A license unlocks unlimited actions.
 //!
-//! Keys are HMAC-SHA256 signed (not cryptographically unforgeable — this is
-//! an honest indie-tool gate, not DRM against a determined attacker) and are
-//! verified fully offline. Format: GJ-XXXX-XXXX-XXXX-XXXX (Crockford base32).
+//! Licenses are Ed25519-signed and verified against a public key embedded in
+//! the binary. The signing key is NOT in this repository, so licenses cannot
+//! be forged from the published source. A license is a pasteable block:
+//!
+//!   GJKEY-<base64 of payload[6] || signature[64]>
+//!
+//! (70 bytes payload+signature, ~96 base64 characters, whitespace-tolerant.)
 
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// The license secret. Rotating this invalidates all previous keys.
-const SECRET: &[u8] = b"gguf-janitor-v1-license-secret-7c4f2a91";
+use serde::{Deserialize, Serialize};
+
+/// Ed25519 public key (hex). The matching private key is kept by the
+/// maintainer outside this repository (license-private-key.txt, gitignored).
+pub const LICENSE_PUBLIC_KEY: [u8; 32] = LICENSE_PUBLIC_KEY_BYTES;
+
+include!("license_pubkey.inc");
 
 /// Free tier: actions allowed on files up to this size.
 pub const FREE_FILE_LIMIT: u64 = 1024 * 1024 * 1024; // 1 GiB
+
+const KEY_PREFIX: &str = "GJKEY-";
+/// payload: version u8, flags u8, serial u32 big-endian
+const PAYLOAD_LEN: usize = 6;
+const SIG_LEN: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -36,111 +49,102 @@ impl LicenseState {
     }
 }
 
-const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford
-
-fn base32_encode(bytes: &[u8]) -> String {
-    let mut out = String::new();
-    let mut bits: u32 = 0;
-    let mut acc: u32 = 0;
-    for &b in bytes {
-        acc = (acc << 8) | b as u32;
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            out.push(ALPHABET[((acc >> bits) & 0x1F) as usize] as char);
-        }
+/// Sign a payload (maintainer-only keygen binary; private key from file).
+pub fn sign_payload(private_key_hex: &str, payload: &[u8; PAYLOAD_LEN]) -> Option<String> {
+    use ed25519_dalek::{Signer, SigningKey};
+    if private_key_hex.trim().len() != 64 {
+        return None;
     }
-    if bits > 0 {
-        out.push(ALPHABET[((acc << (5 - bits)) & 0x1F) as usize] as char);
+    let mut seed = [0u8; 32];
+    for i in 0..32 {
+        seed[i] = u8::from_str_radix(&private_key_hex.trim()[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    let signing = SigningKey::from_bytes(&seed);
+    let sig = signing.sign(payload).to_bytes();
+    let mut blob = Vec::with_capacity(PAYLOAD_LEN + SIG_LEN);
+    blob.extend_from_slice(payload);
+    blob.extend_from_slice(&sig);
+    Some(format!("{KEY_PREFIX}{}", base64_std(&blob)))
+}
+
+/// Verify a license block; returns Pro on success.
+pub fn verify_key(raw: &str) -> Option<LicenseState> {
+    verify_with_pubkey(raw, &LICENSE_PUBLIC_KEY)
+}
+
+fn verify_with_pubkey(raw: &str, public_key: &[u8; 32]) -> Option<LicenseState> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let compact: String = raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("");
+    let body = compact.strip_prefix(KEY_PREFIX).or(if compact.starts_with("GJ") {
+        Some(&compact[..])
+    } else {
+        None
+    })?;
+    let blob = base64_decode(body)?;
+    if blob.len() != PAYLOAD_LEN + SIG_LEN {
+        return None;
+    }
+    let (payload, sig_bytes) = blob.split_at(PAYLOAD_LEN);
+    if payload[0] != 1 {
+        return None; // version
+    }
+    if payload[1] & 1 != 1 {
+        return Some(LicenseState::Free);
+    }
+    let vk = VerifyingKey::from_bytes(public_key).ok()?;
+    let mut sig_arr = [0u8; SIG_LEN];
+    sig_arr.copy_from_slice(sig_bytes);
+    let sig = Signature::from_bytes(&sig_arr);
+    vk.verify(payload, &sig).ok()?;
+    Some(LicenseState::Pro)
+}
+
+fn base64_std(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(CHARS[(n >> 18) as usize & 63] as char);
+        out.push(CHARS[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { CHARS[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { CHARS[n as usize & 63] as char } else { '=' });
     }
     out
 }
 
-fn base32_decode(s: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for ch in s.chars() {
-        let v = match ch.to_ascii_uppercase() {
-            'O' => 0,
-            'I' | 'L' => 1,
-            c => {
-                let idx = ALPHABET.iter().position(|&a| a as char == c)?;
-                idx as u32
-            }
-        };
-        acc = (acc << 5) | v;
-        bits += 5;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((acc >> bits) & 0xFF) as u8);
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let rev = |c: u8| -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let cleaned: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b'=').collect();
+    let mut out = Vec::with_capacity(cleaned.len() * 3 / 4);
+    for chunk in cleaned.chunks(4) {
+        let mut n: u32 = 0;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= rev(c)? << (18 - 6 * i);
+        }
+        match chunk.len() {
+            4 => out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8, n as u8]),
+            3 => out.extend_from_slice(&[(n >> 16) as u8, (n >> 8) as u8]),
+            2 => out.push((n >> 16) as u8),
+            _ => return None,
         }
     }
     Some(out)
-}
-
-fn normalize_key(raw: &str) -> Option<String> {
-    let cleaned: String = raw
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect::<String>()
-        .to_uppercase();
-    let body = cleaned.strip_prefix("GJ")?;
-    if body.len() != 16 {
-        return None;
-    }
-    Some(body.to_uppercase())
-}
-
-/// Generate a Pro key (used by the maintainer-only keygen binary).
-pub fn generate_pro_key() -> String {
-    // payload: [flags=1, reserved=0, serial=u32 from time] + 4 mac bytes = 10 bytes
-    let serial = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as u32)
-        .unwrap_or(0);
-    let payload = [1u8, 0u8, (serial >> 24) as u8, (serial >> 16) as u8, (serial >> 8) as u8, serial as u8];
-    let mac = hmac_sha256(SECRET, &payload);
-    let mut bytes = payload.to_vec();
-    bytes.extend_from_slice(&mac[..4]);
-    let body = base32_encode(&bytes);
-    debug_assert_eq!(body.len(), 16);
-    format!("GJ-{}-{}-{}-{}", &body[0..4], &body[4..8], &body[8..12], &body[12..16])
-}
-
-/// Verify a key; returns Pro on success.
-pub fn verify_key(raw: &str) -> Option<LicenseState> {
-    let body = normalize_key(raw)?;
-    let bytes = base32_decode(&body)?;
-    if bytes.len() != 10 {
-        return None;
-    }
-    let (payload, mac) = bytes.split_at(6);
-    let expect = hmac_sha256(SECRET, payload);
-    // constant-time-ish compare
-    let mut diff = 0u8;
-    for i in 0..4 {
-        diff |= expect[i] ^ mac[i];
-    }
-    if diff != 0 {
-        return None;
-    }
-    if payload[0] & 1 == 1 {
-        Some(LicenseState::Pro)
-    } else {
-        Some(LicenseState::Free)
-    }
-}
-
-fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("hmac key");
-    mac.update(msg);
-    let out = mac.finalize().into_bytes();
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&out);
-    arr
 }
 
 /// Where the license file lives: %APPDATA%\GGUFJanitor\license.key
@@ -169,7 +173,7 @@ pub fn current_state() -> LicenseState {
     LicenseState::Free
 }
 
-/// Persist a license key; returns verification result.
+/// Persist a license block; returns verification result.
 pub fn activate(raw: &str) -> Result<LicenseState, String> {
     match verify_key(raw) {
         Some(state) => {
@@ -181,7 +185,7 @@ pub fn activate(raw: &str) -> Result<LicenseState, String> {
             }
             Ok(state)
         }
-        None => Err("invalid license key".to_string()),
+        None => Err("invalid license".to_string()),
     }
 }
 
@@ -193,30 +197,77 @@ pub fn action_allowed(state: LicenseState, size: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
 
-    #[test]
-    fn keygen_verify_roundtrip() {
-        let key = generate_pro_key();
-        assert_eq!(verify_key(&key), Some(LicenseState::Pro));
-        // lowercased, spacing variants accepted
-        let body = key.strip_prefix("GJ-").unwrap().replace('-', "").to_lowercase();
-        assert_eq!(body.len(), 16);
-        let mangled = format!("gj-{}-{}-{}-{}", &body[0..4], &body[4..8], &body[8..12], &body[12..16]);
-        assert_eq!(verify_key(&mangled), Some(LicenseState::Pro));
+    const TEST_SEED_HEX: &str = "9f0c1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7";
+
+    fn test_pubkey() -> [u8; 32] {
+        use ed25519_dalek::SigningKey;
+        let mut seed = [0u8; 32];
+        for i in 0..32 {
+            seed[i] = u8::from_str_radix(&TEST_SEED_HEX[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        SigningKey::from_bytes(&seed).verifying_key().to_bytes()
     }
 
     #[test]
-    fn rejects_tampered_keys() {
-        let key = generate_pro_key();
+    fn sign_verify_roundtrip() {
+        let payload = [1u8, 1, 0x12, 0x34, 0x56, 0x78];
+        let key = sign_payload(TEST_SEED_HEX, &payload).unwrap();
+        assert!(key.starts_with("GJKEY-"));
+        assert_eq!(verify_with_pubkey(&key, &test_pubkey()), Some(LicenseState::Pro));
+        // whitespace / line-wrap tolerant (as it would arrive by email)
+        let wrapped = key
+            .chars()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                let mut v = vec![c];
+                if i % 24 == 23 {
+                    v.push('\n');
+                }
+                v.into_iter()
+            })
+            .collect::<String>();
+        assert_eq!(verify_with_pubkey(&wrapped, &test_pubkey()), Some(LicenseState::Pro));
+    }
+
+    #[test]
+    fn rejects_tampered_and_foreign() {
+        let payload = [1u8, 1, 0xAA, 0xBB, 0xCC, 0xDD];
+        let key = sign_payload(TEST_SEED_HEX, &payload).unwrap();
+        // flip a payload char inside the base64 body
         let mut chars: Vec<char> = key.chars().collect();
-        // flip one body char to another valid base32 char
-        let last = chars.len() - 2;
+        let last = chars.len() - 1;
         chars[last] = if chars[last] == 'A' { 'B' } else { 'A' };
         let tampered: String = chars.into_iter().collect();
-        assert_ne!(verify_key(&tampered), Some(LicenseState::Pro));
-        assert_eq!(verify_key("GJ-AAAA-BBBB-CCCC-DDDD"), None);
+        assert_ne!(verify_with_pubkey(&tampered, &test_pubkey()), Some(LicenseState::Pro));
         assert_eq!(verify_key(""), None);
-        assert_eq!(verify_key("totally-not-a-key"), None);
+        assert_eq!(verify_key("GJKEY-notbase64!!"), None);
+        assert_eq!(verify_key("totally-unrelated"), None);
+    }
+
+    #[test]
+    fn wrong_signing_key_is_rejected() {
+        // A key signed with a different private key must not verify.
+        let payload = [1u8, 1, 1, 2, 3, 4];
+        let mut seed_hex = TEST_SEED_HEX.to_string();
+        seed_hex.replace_range(0..1, "0");
+        let key = sign_payload(&seed_hex, &payload).unwrap();
+        assert_eq!(verify_with_pubkey(&key, &test_pubkey()), None);
+    }
+
+    #[test]
+    fn base64_roundtrip() {
+        for sample in [
+            &b"\x01\x01\x12\x34\x56\x78"[..],
+            b"x",
+            b"ab",
+            b"abc",
+            &[0xffu8; 70][..],
+        ] {
+            let enc = base64_std(sample);
+            assert_eq!(base64_decode(&enc).unwrap(), sample, "{enc}");
+        }
     }
 
     #[test]
@@ -224,14 +275,5 @@ mod tests {
         assert!(action_allowed(LicenseState::Free, FREE_FILE_LIMIT));
         assert!(!action_allowed(LicenseState::Free, FREE_FILE_LIMIT + 1));
         assert!(action_allowed(LicenseState::Pro, u64::MAX));
-    }
-
-    #[test]
-    fn base32_roundtrip() {
-        for sample in [&b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09"[..], b"hello", b"\xff\xff\xff"] {
-            let enc = base32_encode(sample);
-            let dec = base32_decode(&enc).unwrap();
-            assert_eq!(dec, sample, "{enc}");
-        }
     }
 }

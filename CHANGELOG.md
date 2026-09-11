@@ -4,6 +4,15 @@ All notable changes to GGUF Janitor are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-09-12
+
+### Changed
+- **License format**: HMAC-based typed keys replaced by Ed25519-signed license
+  blocks (`GJKEY-…`, pasteable, whitespace-tolerant). Verification now uses a
+  public key embedded in the binary; the signing key lives only with the
+  maintainer, so licenses cannot be forged from the published source.
+- The GUI license dialog accepts pasted license blocks.
+
 ## [0.1.1] — 2026-09-12
 
 ### Added

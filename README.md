@@ -119,11 +119,13 @@ unlocks dedupe of arbitrarily large models (70B+ quants, FP16 shards…).
 Activate from a terminal:
 
 ```
-gguf-janitor activate GJ-XXXX-XXXX-XXXX-XXXX
+gguf-janitor activate "GJKEY-…"
 ```
 
-Licenses are verified fully offline; buy once, keep forever. (See
-`docs/BUYING.md` for the current purchase link.)
+Licenses are Ed25519-signed blocks pasted once into the GUI (or
+`gguf-janitor activate "$(cat license.txt)"`), verified fully offline — no
+account, no telemetry. Buy once, keep forever. (See `docs/BUYING.md` for the
+current purchase link.)
 
 ## Building from source
 

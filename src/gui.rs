@@ -456,11 +456,15 @@ impl eframe::App for App {
                         LicenseState::Free => ui.label(
                             "Free tier: dedupe/archive files up to 1 GiB each.
 
-                             Enter your license key to unlock unlimited sizes.",
+                             Paste your license block (GJKEY-…) to unlock unlimited sizes.",
                         ),
                     };
                     ui.add_space(6.0);
-                    ui.add(egui::TextEdit::singleline(&mut self.license_input).hint_text("GJ-XXXX-XXXX-XXXX-XXXX"));
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.license_input)
+                            .desired_rows(2)
+                            .hint_text("GJKEY-… paste the license block from your purchase email"),
+                    );
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         if ui.add_enabled(!self.license_input.trim().is_empty(), egui::Button::new("Activate")).clicked() {

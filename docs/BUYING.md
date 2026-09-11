@@ -19,10 +19,11 @@ entirely — 70B+ quants, multi-shard FP16 models, whatever you run.
 
 1. Buy on Gumroad: **https://233233233.gumroad.com/l/gguf-janitor-pro**
    _(placeholder — final link goes here; draft copy in `docs/MARKETING.md`)_
-2. You receive a key that looks like `GJ-XXXX-XXXX-XXXX-XXXX`.
-3. Activate in the GUI (license badge → enter key) or:
+2. You receive a license block that looks like `GJKEY-AQEAAA…` (one long
+   pasteable line).
+3. Activate in the GUI (click the **License: Free** badge → paste) or:
    ```
-   gguf-janitor activate GJ-XXXX-XXXX-XXXX-XXXX
+   gguf-janitor activate "GJKEY-…"
    ```
 4. The key is stored at `%APPDATA%\GGUFJanitor\license.key` and validated
    offline — no account, no telemetry, no phone-home.

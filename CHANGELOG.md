@@ -4,6 +4,12 @@ All notable changes to GGUF Janitor are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.1.1] — 2026-09-12
+
+### Added
+- License activation dialog inside the GUI (click the "License: Free" badge),
+  matching the CLI `activate` command.
+
 ## [0.1.0] — 2026-09-12
 
 ### Added

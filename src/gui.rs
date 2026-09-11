@@ -61,6 +61,9 @@ struct App {
     confirm: Option<JobKind>,
     show_about: bool,
     license_state: LicenseState,
+    show_license: bool,
+    license_input: String,
+    license_msg: Option<String>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -84,6 +87,9 @@ impl Default for App {
             confirm: None,
             show_about: false,
             license_state: license::current_state(),
+            show_license: false,
+            license_input: String::new(),
+            license_msg: None,
         }
     }
 }
@@ -337,8 +343,13 @@ impl eframe::App for App {
                         "Free tier: dedupe files up to 1 GiB. gguf-janitor activate <key> unlocks unlimited.",
                     ),
                 };
-                ui.label(egui::RichText::new(format!("License: {state_label}")).weak())
-                    .on_hover_text(tip);
+                if ui
+                    .add(egui::Button::new(egui::RichText::new(format!("License: {state_label}")).weak()))
+                    .clicked()
+                {
+                    self.show_license = true;
+                }
+                ui.label(egui::RichText::new("").weak()).on_hover_text(tip);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("?").clicked() {
                         self.show_about = !self.show_about;
@@ -431,6 +442,43 @@ impl eframe::App for App {
                     ui.label("Duplicates are hash-verified (XXH3 + head/tail byte check)");
                     ui.label("before anything is touched. Actions never silently delete:");
                     ui.label("hardlinks keep every tool working; deletes use the Recycle Bin.");
+                });
+        }
+
+        if self.show_license {
+            egui::Window::new("License")
+                .open(&mut self.show_license)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    match self.license_state {
+                        LicenseState::Pro => ui.label("Pro — all features unlocked. Thank you!"),
+                        LicenseState::Free => ui.label(
+                            "Free tier: dedupe/archive files up to 1 GiB each.
+
+                             Enter your license key to unlock unlimited sizes.",
+                        ),
+                    };
+                    ui.add_space(6.0);
+                    ui.add(egui::TextEdit::singleline(&mut self.license_input).hint_text("GJ-XXXX-XXXX-XXXX-XXXX"));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!self.license_input.trim().is_empty(), egui::Button::new("Activate")).clicked() {
+                            match license::activate(self.license_input.trim()) {
+                                Ok(LicenseState::Pro) => {
+                                    self.license_state = LicenseState::Pro;
+                                    self.license_msg = Some("Activated. Thank you for supporting GGUF Janitor!".into());
+                                }
+                                Ok(_) => self.license_msg = Some("Key accepted but does not unlock Pro.".into()),
+                                Err(e) => self.license_msg = Some(format!("Invalid key: {e}")),
+                            }
+                        }
+                    });
+                    if let Some(m) = &self.license_msg {
+                        ui.label(m);
+                    }
+                    ui.add_space(4.0);
+                    ui.weak("Keys are validated offline; buy once at the link in docs/BUYING.md.");
                 });
         }
 

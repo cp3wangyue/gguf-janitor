@@ -1,3 +1,4 @@
 target/
 dist/pkg/
 license-private-key.txt
+tenstorrent-watch.log

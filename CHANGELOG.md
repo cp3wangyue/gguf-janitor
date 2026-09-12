@@ -4,6 +4,12 @@ All notable changes to GGUF Janitor are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/).
 
+## [0.2.2] — 2026-09-13
+
+### Changed
+- The GUI window now opens maximized (with a 900×600 minimum) — better first
+  run on large monitors; screenshots and demo refreshed.
+
 ## [0.2.1] — 2026-09-12
 
 ### Added

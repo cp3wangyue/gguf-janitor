@@ -714,6 +714,8 @@ pub fn run() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1150.0, 780.0])
+            .with_min_inner_size([900.0, 600.0])
+            .with_maximized(true)
             .with_icon(load_icon()),
         ..Default::default()
     };

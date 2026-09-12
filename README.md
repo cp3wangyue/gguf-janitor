@@ -15,6 +15,12 @@ RAM / VRAM.
 
 ![GGUF Janitor duplicates view](docs/screenshot-duplicates.png)
 
+![GGUF Janitor demo](docs/demo.gif)
+
+| All models (with RAM/VRAM detection) | Per-model fit detail |
+|---|---|
+| ![All models](docs/screenshot-models.png) | ![Fit check](docs/screenshot-fit.png) |
+
 ## Why it's safe
 
 Reclaiming space from files that other programs manage is risky, so GGUF
@@ -130,7 +136,7 @@ current purchase link.)
 ## Building from source
 
 ```
-cargo test        # 30 unit tests
+cargo test        # 33 unit tests
 cargo build --release
 ```
 
